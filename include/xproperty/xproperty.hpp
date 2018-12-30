@@ -46,17 +46,10 @@ namespace xp
 
     // Type, Owner Type, Derived Type
 
-    template <class T, class O, class D>
+    template <class T>
     class xproperty
     {
     public:
-
-        using xp_owner_type = O;
-        using xp_derived_type = D;
-
-        xp_derived_type& derived_cast() & noexcept;
-        const xp_derived_type& derived_cast() const & noexcept;
-        xp_derived_type derived_cast() && noexcept;
 
         using value_type = T;
         using reference = T&;
@@ -72,19 +65,7 @@ namespace xp
         reference operator()() noexcept;
         const_reference operator()() const noexcept;
 
-        xp_owner_type operator()(value_type& arg) && noexcept;
-        xp_owner_type operator()(const value_type& arg) && noexcept;
-        xp_owner_type operator()(value_type&& arg) && noexcept;
-
-        template <class Arg1, class Arg2, class... Args>
-        xp_owner_type operator()(Arg1&& arg1, Arg2&& arg2, Args&&... args) && noexcept;
-
-        template <class V>
-        reference operator=(V&& value);
-
-    private:
-
-        xp_owner_type* owner() noexcept;
+    protected:
 
         value_type m_value;
     };
@@ -110,18 +91,19 @@ namespace xp
     // The `T` typename is a universal reference on the proposed value.
     // The return type of `invoke_validator` must be convertible to the value_type of the property.
 
-    #define XPROPERTY_GENERAL(T, O, D, value, lambda_validator)                                  \
-    class D##_property : public ::xp::xproperty<T, O, D##_property>                              \
+    #define XPROPERTY_GENERAL(T, O, D, DEFAULT_VALUE, lambda_validator)                          \
+    class D##_property : public ::xp::xproperty<T>                                               \
     {                                                                                            \
     public:                                                                                      \
                                                                                                  \
-        using base_type = ::xp::xproperty<T, O, D##_property>;                                   \
+        using base_type = ::xp::xproperty<T>;                                                    \
+        using xp_owner_type = O;                                                                 \
                                                                                                  \
         template <class V>                                                                       \
         typename base_type::reference operator=(V&& rhs)                                         \
         {                                                                                        \
             lambda_validator(rhs);                                                               \
-            return base_type::operator=(std::forward<V>(rhs));                                   \
+            return assign(std::forward<V>(rhs));                                                 \
         }                                                                                        \
                                                                                                  \
         static inline constexpr const char* name() noexcept                                      \
@@ -134,9 +116,53 @@ namespace xp
             return xoffsetof(O, D);                                                              \
         }                                                                                        \
                                                                                                  \
-        static inline T default_value() noexcept                                       \
+        inline typename base_type::reference operator()() noexcept                               \
         {                                                                                        \
-            return T(value);                                                                     \
+            return base_type::operator()();                                                      \
+        }                                                                                        \
+                                                                                                 \
+        inline typename base_type::const_reference operator()() const noexcept                   \
+        {                                                                                        \
+            return base_type::operator()();                                                      \
+        }                                                                                        \
+                                                                                                 \
+        inline xp_owner_type operator()(const typename base_type::value_type& arg) && noexcept   \
+        {                                                                                        \
+            this->m_value = arg;                                                                 \
+            return std::move(*owner());                                                          \
+        }                                                                                        \
+                                                                                                 \
+        inline xp_owner_type operator()(typename base_type::value_type&& arg) && noexcept        \
+        {                                                                                        \
+            this->m_value = std::move(arg);                                                      \
+            return std::move(*owner());                                                          \
+        }                                                                                        \
+                                                                                                 \
+        template <class Arg1, class Arg2, class... Args>                                         \
+        xp_owner_type operator()(Arg1&& arg1, Arg2&& arg2, Args&&... args) && noexcept           \
+        {                                                                                        \
+            this->m_value = typename base_type::value_type(std::forward<Arg1>(arg1),             \
+                                                           std::forward<Arg2>(arg2),             \
+                                                           std::forward<Args>(args)...);         \
+            return std::move(*owner());                                                          \
+        }                                                                                        \
+                                                                                                 \
+    private:                                                                                     \
+                                                                                                 \
+        inline xp_owner_type* owner() noexcept                                                   \
+        {                                                                                        \
+            return reinterpret_cast<xp_owner_type*>(                                             \
+                reinterpret_cast<char*>(this) - offset()                                         \
+            );                                                                                   \
+        }                                                                                        \
+                                                                                                 \
+        template <class VT = typename base_type::value_type>                                     \
+        inline typename base_type::reference assign(const typename base_type::value_type& value) \
+        {                                                                                        \
+            this->m_value = owner()->template invoke_validators<D##_property>(value);               \
+            owner()->notify(*this);                                                              \
+            owner()->template invoke_observers<D##_property>();                                     \
+            return this->m_value;                                                                \
         }                                                                                        \
     } D;
 
@@ -202,110 +228,46 @@ namespace xp
      * xproperty implementation *
      ****************************/
 
-    template <class T, class O, class D>
-    inline auto xproperty<T, O, D>::derived_cast() & noexcept -> xp_derived_type&
-    {
-        return *static_cast<xp_derived_type*>(this);
-    }
-
-    template <class T, class O, class D>
-    inline auto xproperty<T, O, D>::derived_cast() const & noexcept -> const xp_derived_type&
-    {
-        return *static_cast<const xp_derived_type*>(this);
-    }
-
-    template <class T, class O, class D>
-    inline auto xproperty<T, O, D>::derived_cast() && noexcept -> xp_derived_type
-    {
-        return *static_cast<xp_derived_type*>(this);
-    }
-
-    template <class T, class O, class D>
-    inline constexpr xproperty<T, O, D>::xproperty() noexcept(noexcept(std::is_nothrow_constructible<value_type>::value))
-        : m_value(D::default_value())
+    template <class T>
+    inline constexpr xproperty<T>::xproperty() noexcept(noexcept(std::is_nothrow_constructible<value_type>::value))
+        : m_value()
     {
     }
 
-    template <class T, class O, class D>
-    inline constexpr xproperty<T, O, D>::xproperty(value_type&& value) noexcept(noexcept(std::is_nothrow_move_constructible<value_type>::value))
+    template <class T>
+    inline constexpr xproperty<T>::xproperty(value_type&& value) noexcept(noexcept(std::is_nothrow_move_constructible<value_type>::value))
         : m_value(value)
     {
     }
 
-    template <class T, class O, class D>
-    inline constexpr xproperty<T, O, D>::xproperty(const_reference value) noexcept(noexcept(std::is_nothrow_constructible<value_type>::value))
+    template <class T>
+    inline constexpr xproperty<T>::xproperty(const_reference value) noexcept(noexcept(std::is_nothrow_constructible<value_type>::value))
         : m_value(value)
     {
     }
 
-    template <class T, class O, class D>
-    inline xproperty<T, O, D>::operator reference() noexcept
+    template <class T>
+    inline xproperty<T>::operator reference() noexcept
     {
         return m_value;
     }
 
-    template <class T, class O, class D>
-    inline xproperty<T, O, D>::operator const_reference() const noexcept
+    template <class T>
+    inline xproperty<T>::operator const_reference() const noexcept
     {
         return m_value;
     }
 
-    template <class T, class O, class D>
-    inline auto xproperty<T, O, D>::operator()() noexcept -> reference
+    template <class T>
+    inline auto xproperty<T>::operator()() noexcept -> reference
     {
         return m_value;
     }
 
-    template <class T, class O, class D>
-    inline auto xproperty<T, O, D>::operator()() const noexcept -> const_reference
+    template <class T>
+    inline auto xproperty<T>::operator()() const noexcept -> const_reference
     {
         return m_value;
-    }
-
-
-    template <class T, class O, class D>
-    inline auto xproperty<T, O, D>::operator()(value_type& arg) && noexcept -> xp_owner_type
-    {
-        m_value = arg;
-        return std::move(*owner());
-    }
-
-    template <class T, class O, class D>
-    inline auto xproperty<T, O, D>::operator()(const value_type& arg) && noexcept -> xp_owner_type
-    {
-        m_value = arg;
-        return std::move(*owner());
-    }
-
-    template <class T, class O, class D>
-    inline auto xproperty<T, O, D>::operator()(value_type&& arg) && noexcept -> xp_owner_type
-    {
-        m_value = std::move(arg);
-        return std::move(*owner());
-    }
-
-    template <class T, class O, class D>
-    template <class Arg1, class Arg2, class... Args>
-    inline auto xproperty<T, O, D>::operator()(Arg1&& arg1, Arg2&& arg2, Args&&... args) && noexcept -> xp_owner_type
-    {
-        m_value = value_type(std::forward<Arg1>(arg1), std::forward<Arg2>(arg2), std::forward<Args>(args)...);
-        return std::move(*owner());
-    }
-
-    template <class T, class O, class D>
-    template <class V>
-    inline auto xproperty<T, O, D>::operator=(V&& value) -> reference
-    {
-        m_value = owner()->template invoke_validators<xp_derived_type>(std::forward<V>(value));
-        owner()->notify(derived_cast());
-        owner()->template invoke_observers<xp_derived_type>();
-        return m_value;
-    }
-
-    template <class T, class O, class D>
-    inline auto xproperty<T, O, D>::owner() noexcept -> xp_owner_type*
-    {
-        return reinterpret_cast<xp_owner_type*>(reinterpret_cast<char*>(this) - xp_derived_type::offset());
     }
 }
 

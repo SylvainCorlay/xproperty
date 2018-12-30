@@ -98,14 +98,6 @@ namespace xp
         xobserved(xobserved&&) = default;
         xobserved& operator=(xobserved&&) = default;
 
-    private:
-
-        std::unordered_map<std::size_t, std::vector<std::function<void(derived_type&)>>> m_observers;
-        std::unordered_map<std::size_t, std::vector<xtl::any>> m_validators;
-
-        template <class X, class Y, class Z>
-        friend class xproperty;
-
         template <class P>
         void notify(const P&);
 
@@ -114,6 +106,11 @@ namespace xp
 
         template <class P, class V>
         auto invoke_validators(V&& r);
+
+    private:
+
+        std::unordered_map<std::size_t, std::vector<std::function<void(derived_type&)>>> m_observers;
+        std::unordered_map<std::size_t, std::vector<xtl::any>> m_validators;
     };
 
     template <class E>
